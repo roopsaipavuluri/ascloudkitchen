@@ -1,21 +1,22 @@
 # Cloud Kitchen / Online Food Ordering Website
 
-A full-stack food ordering platform built with React, Express, and a MySQL-ready schema. This project includes a customer storefront, cart and checkout flow, admin dashboard, party orders, catering requests, contact form, and secure authentication.
+A full-stack food ordering platform built with React, Express, Supabase PostgreSQL, and Supabase Storage. This project includes a customer storefront, cart and checkout flow, admin dashboard, party orders, catering requests, contact form, and secure authentication.
 
 ## Tech Stack
 
 - Frontend: React + Vite
 - Backend: Node.js + Express
 - Authentication: JWT + bcrypt
-- Database: MongoDB Atlas persistence for the live JSON-backed app state; MySQL schema also included in `database/schema.sql`
+- Database and image storage: Supabase PostgreSQL and Supabase Storage
 - Styling: Responsive custom CSS
 
 ## Project Structure
 
 - `backend/server.js` — Express API server and business logic
 - `backend/db.js` — seed data and application state
-- `backend/persistence.js` — local JSON or MongoDB Atlas state and image persistence
-- `database/schema.sql` — MySQL schema for production use
+- `backend/persistence.js` — Supabase persistence and local JSON development storage
+- `database/supabase-schema.sql` — production PostgreSQL schema and public image bucket setup
+- `database/schema.sql` — legacy MySQL schema reference; not used by the current API
 - `frontend/public/assets/cloud-kitchen-logo.jpg` — supplied Cloud Kitchen logo used across the site
 - `frontend/src/` — React application files
 - `frontend/vite.config.js` — Vite dev server config with API proxy
@@ -39,7 +40,7 @@ A full-stack food ordering platform built with React, Express, and a MySQL-ready
    copy .env.example .env
    ```
    Set `ADMIN_PASSWORD` and `JWT_SECRET` in `.env` to strong private values before starting the app. When `ADMIN_PASSWORD` is not set, the backend generates a temporary admin password and prints it once at startup.
-3. (Optional for local development) Set `MONGODB_URI` in `.env` to use MongoDB Atlas. Without it, the backend saves data to `backend/data/state.json` and stores uploaded images under `uploads/`.
+3. For local development, leave Supabase variables blank to use the local JSON development store, or configure them in `.env` to connect to the hosted database.
 4. Start the backend:
    ```bash
    npm run server
@@ -54,25 +55,36 @@ A full-stack food ordering platform built with React, Express, and a MySQL-ready
 
 The seeded admin email defaults to `ascloudkitchenofficial@gmail.com`; its password is configured in `.env`. The demo customer credentials are `demo@cloudkitchen.com` / `demo123` and should only be used for local demonstration.
 
-In `/admin`, manage food items, categories, catering services, the homepage Popular This Week combo, and checkout payment details: add/edit/delete menu items, update prices and food images, set a serving size in grams or kilograms, manage featured categories and combo title/description/price/image, and add/edit/delete catering services with image uploads and visibility controls. Catering starting prices are maintained in admin only and are not shown on the public Events & Catering page. Payment settings control checkout's COD/online choices and the UPI ID and/or QR code shown to customers. JPEG, PNG, or WebP images (up to 5 MB) are supported. In local JSON mode, images are saved under `uploads/`; in MongoDB mode, application state and image bytes are stored in MongoDB Atlas. Successful API changes are saved before the server responds.
+In `/admin`, manage food items, categories, catering services, the homepage Popular This Week combo, and checkout payment details. Changes made by the API are saved to PostgreSQL before a successful response is returned. The backend reloads data from PostgreSQL on API requests, so the database is the source of truth rather than browser state. JPEG, PNG, or WebP images up to 5 MB are stored in Supabase Storage; the persistent public URL is saved with its category, product, service, or setting.
 
-## SQL Schema Reference
+## Database Schema
 
-`database/schema.sql` is retained as a relational schema reference. The running application currently persists its complete state and uploaded images through the MongoDB Atlas adapter described below; the MySQL schema is not connected to the API.
+Run `database/supabase-schema.sql` in the Supabase SQL Editor before starting the API. It creates relational category, food, and catering tables (including the food-to-category foreign key), JSONB detail fields for existing application-specific properties, settings and records tables, timestamps, row-level security, and the public images bucket. The API uses a server-only Supabase service key; anon/authenticated clients have no direct table write access.
 
 ## Deployment Notes
 
-- Render's free service uses ephemeral local storage, so set `MONGODB_URI` to a MongoDB Atlas connection string to keep admin edits and uploaded images through restarts and redeploys. Atlas has a no-cost shared tier; quotas and provider terms apply, so periodically export a backup. Never commit the connection string.
-- For the existing Render service, create a free MongoDB Atlas cluster and database user, allow Render to connect under Atlas Network Access, then add `MONGODB_URI` under Render Dashboard → your backend service → Environment. Set `MONGODB_DATABASE` to `as_cloud_kitchen` (or keep its default), save, and redeploy. Use the Atlas connection string for the database user, not an account password. The first connection initializes the database with the current seed catalog; previously lost in-memory edits cannot be recovered by this migration.
-- A Render Blueprint is provided in `render.yaml`. In Render, create a new Blueprint from this GitHub repository and set the prompted `ADMIN_PASSWORD`, `MONGODB_URI`, and other secrets to private values. Render generates `JWT_SECRET` and uses the live Vercel origin for CORS. After deployment, confirm `https://<render-service>.onrender.com/api/health` returns `"storage":"mongodb-atlas"` and check the logs for `Persistent storage: MongoDB Atlas.`
+- Create a Supabase project and run `database/supabase-schema.sql` in its SQL Editor. Copy the project URL and the server-side `service_role` key from Project Settings → API.
+- A Render Blueprint is provided in `render.yaml`. Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET=cloud-kitchen-assets`, `ADMIN_PASSWORD`, `JWT_SECRET`, and the other secrets on the Render backend service. Never put the service-role key in Vercel or frontend environment variables. The production API refuses to start without Supabase and stable authentication secrets rather than silently falling back to temporary storage.
+- After deployment, confirm `https://<render-service>.onrender.com/api/health` returns `"storage":"supabase-postgres"` and check the service logs for `Persistent storage: Supabase PostgreSQL.`
 - The production frontend defaults to `https://ascloudkitchen.onrender.com/api`. If the backend URL changes, set `VITE_API_BASE_URL` in Vercel to the replacement API URL ending in `/api`, then redeploy the frontend.
+- Supabase secrets belong only in Render's backend environment. Vercel should contain `VITE_API_BASE_URL` only when the backend URL differs from the default; the frontend never receives a database credential.
 - `frontend/vercel.json` rewrites client-side routes such as `/admin` to the React application so direct links and refreshes work on Vercel.
 - Keep `VITE_API_BASE_URL` blank for local Vite development; `vite.config.js` proxies API and image requests to `http://localhost:5000`.
 - Set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, and the backend's `CLIENT_URL` on the backend host. Allow the frontend origin in the backend CORS configuration.
 - Keep all secrets in environment variables.
 - Do not hardcode localhost URLs in production.
-- Without `MONGODB_URI`, local development stores state in a JSON file, but a hosted Render service will still lose local files on restarts or redeploys. Verify the MongoDB persistence startup log before editing live catalog data.
+- For local JSON development only, state is saved under ignored `backend/data/state.json` and uploaded files under ignored `uploads/`. The hosted backend requires Supabase; it never uses local filesystem data as production persistence.
+
+## Persistence Verification
+
+1. Confirm the live API health endpoint reports `"storage":"supabase-postgres"`.
+2. Sign in to `/admin`, change a food field, and click its Save/Update button.
+3. Confirm the success message appears. The API commits the change to PostgreSQL before returning success.
+4. Refresh `/admin`; confirm the saved value remains.
+5. Open the public menu and confirm the same value is displayed.
+6. Open the site in a private browser or another device and verify the same value appears.
+7. Replace an image and confirm the new Supabase Storage URL is saved and the previous object is removed after the database update.
 
 ## Notes
 
-This repo includes a functional demo app with a real backend and working frontend flow. For a MySQL-backed production deployment, use the included schema and configure the database connection settings in the environment.
+The existing transient live edits that disappeared before Supabase was configured cannot be recovered from the backend; the initial Supabase database will be populated from the current project seed. Free Supabase project quotas and provider terms apply. Keep regular database backups and monitor database and storage capacity.

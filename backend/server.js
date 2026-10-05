@@ -12,15 +12,19 @@ const {
   deleteImage,
   getPersistenceMode,
   initializePersistence,
-  readImage,
+  refreshState,
   saveState,
   storeImage
 } = require('./persistence');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isHostedProduction = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+if (isHostedProduction && !process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET is required in production.');
+}
 const JWT_SECRET = process.env.JWT_SECRET || randomBytes(32).toString('hex');
-if (!process.env.JWT_SECRET) {
+if (!process.env.JWT_SECRET && !isHostedProduction) {
   console.warn('JWT_SECRET is unset. Generated a temporary secret; sessions will not persist after a restart.');
 }
 const uploadsDirectory = path.resolve(__dirname, '..', 'uploads');
@@ -43,54 +47,72 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
-let persistenceQueue = Promise.resolve();
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+let writeQueue = Promise.resolve();
+app.use(async (req, res, next) => {
+  const isReadOnly = ['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+  const previousWrite = writeQueue;
+  let releaseWrite;
+  if (!isReadOnly) {
+    writeQueue = new Promise((resolve) => {
+      releaseWrite = resolve;
+    });
+    res.once('finish', releaseWrite);
+    res.once('close', releaseWrite);
+  }
 
-  const sendJson = res.json.bind(res);
-  res.json = (body) => {
-    if (res.statusCode >= 400) return sendJson(body);
+  try {
+    await previousWrite;
+    await refreshState(state);
+    if (isReadOnly) return next();
 
-    const write = persistenceQueue.then(() => saveState(state));
-    persistenceQueue = write.catch(() => {});
-    write.then(
-      () => sendJson(body),
-      (error) => {
-        console.error('Request changes could not be persisted.', error);
-        if (!res.headersSent) {
-          res.status(500);
-          sendJson({ message: 'Changes could not be saved. Please retry.' });
-        }
-      }
-    );
-    return res;
-  };
-  next();
+    const sendJson = res.json.bind(res);
+    res.json = (body) => {
+      if (res.statusCode >= 400) return sendJson(body);
+
+      let statePersisted = false;
+      saveState(state)
+        .then(async () => {
+          statePersisted = true;
+          for (const cleanup of res.locals.afterPersistence || []) await cleanup();
+          sendJson(body);
+        })
+        .catch(async (error) => {
+          console.error('Request changes could not be fully persisted.', error);
+          if (!statePersisted) {
+            for (const rollback of res.locals.onPersistenceFailure || []) {
+              await rollback().catch((rollbackError) => {
+                console.error('An uploaded image could not be cleaned up after a failed database save.', rollbackError);
+              });
+            }
+          }
+          if (!res.headersSent) {
+            res.status(500);
+            sendJson({
+              message: statePersisted
+                ? 'Changes were saved, but an old image could not be removed.'
+                : 'Changes could not be saved. Please retry.'
+            });
+          }
+        });
+      return res;
+    };
+    next();
+  } catch (error) {
+    if (releaseWrite) releaseWrite();
+    next(error);
+  }
 });
 app.use('/uploads', express.static(uploadsDirectory));
 
-app.get('/api/media/:id', async (req, res) => {
-  try {
-    const image = await readImage(req.params.id);
-    if (!image) return res.status(404).json({ message: 'Image not found.' });
-    const imageBytes = Buffer.isBuffer(image.data)
-      ? image.data
-      : image.data.buffer.subarray(0, image.data.position);
-    res.type(image.contentType).set('Cache-Control', 'public, max-age=31536000, immutable').send(imageBytes);
-  } catch (error) {
-    console.error('Stored image could not be loaded.', error);
-    res.status(500).json({ message: 'Image could not be loaded.' });
-  }
-});
-
-function deleteImageAfterSave(res, imagePath, context) {
+function deleteImageAfterSave(res, imagePath) {
   if (!imagePath) return;
-  res.once('finish', () => {
-    if (res.statusCode >= 400) return;
-    deleteImage(imagePath).catch((error) => {
-      console.error(`${context} could not be removed after saving the update.`, error);
-    });
-  });
+  res.locals.afterPersistence = res.locals.afterPersistence || [];
+  res.locals.afterPersistence.push(() => deleteImage(imagePath));
+}
+
+function deleteNewImageIfSaveFails(res, imagePath) {
+  res.locals.onPersistenceFailure = res.locals.onPersistenceFailure || [];
+  res.locals.onPersistenceFailure.push(() => deleteImage(imagePath));
 }
 
 function generateToken(user) {
@@ -321,7 +343,8 @@ app.post('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, handle
   try {
     const previousImage = state.paymentSettings.qrCodeImage;
     state.paymentSettings.qrCodeImage = await storeImage(req.file, 'payment');
-    deleteImageAfterSave(res, previousImage, 'Previous payment QR image');
+    deleteNewImageIfSaveFails(res, state.paymentSettings.qrCodeImage);
+    deleteImageAfterSave(res, previousImage);
   } catch (error) {
     console.error('Payment QR code image could not be saved.', error);
     return res.status(500).json({ message: 'QR code image could not be saved.' });
@@ -336,7 +359,8 @@ app.post('/api/admin/featured-combo/image', authMiddleware, adminOnly, handleIma
   try {
     const previousImage = state.featuredCombo.image;
     state.featuredCombo.image = await storeImage(req.file, 'featured-combo');
-    deleteImageAfterSave(res, previousImage, 'Previous featured combo image');
+    deleteNewImageIfSaveFails(res, state.featuredCombo.image);
+    deleteImageAfterSave(res, previousImage);
   } catch (error) {
     console.error('Featured combo image could not be saved.', error);
     return res.status(500).json({ message: 'Featured combo image could not be saved.' });
@@ -348,14 +372,14 @@ app.post('/api/admin/featured-combo/image', authMiddleware, adminOnly, handleIma
 app.delete('/api/admin/featured-combo/image', authMiddleware, adminOnly, (req, res) => {
   const previousImage = state.featuredCombo.image;
   state.featuredCombo.image = '';
-  deleteImageAfterSave(res, previousImage, 'Featured combo image');
+  deleteImageAfterSave(res, previousImage);
   res.json(state.featuredCombo);
 });
 
 app.delete('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, (req, res) => {
   const imagePath = state.paymentSettings.qrCodeImage;
   state.paymentSettings.qrCodeImage = '';
-  deleteImageAfterSave(res, imagePath, 'Previous payment QR image');
+  deleteImageAfterSave(res, imagePath);
   res.json(state.paymentSettings);
 });
 
@@ -426,7 +450,8 @@ app.delete('/api/admin/categories/:id', authMiddleware, adminOnly, (req, res) =>
     return res.status(409).json({ message: 'Move or delete this category’s food items before deleting the category.' });
   }
 
-  state.categories.splice(categoryIndex, 1);
+  const [category] = state.categories.splice(categoryIndex, 1);
+  deleteImageAfterSave(res, category.image);
   res.json({ id: categoryId, deleted: true });
 });
 
@@ -463,6 +488,7 @@ app.delete('/api/admin/food/:id', authMiddleware, adminOnly, (req, res) => {
   if (foodIndex < 0) return res.status(404).json({ message: 'Food item not found.' });
 
   const [food] = state.foodItems.splice(foodIndex, 1);
+  deleteImageAfterSave(res, food.image);
   res.json({ id: food.id, deleted: true });
 });
 
@@ -482,7 +508,8 @@ async function saveCatalogImage(req, res, collectionName, collection, id) {
   try {
     const previousImage = record.image;
     record.image = await storeImage(req.file, collectionName);
-    deleteImageAfterSave(res, previousImage, `Previous ${collectionName} image`);
+    deleteNewImageIfSaveFails(res, record.image);
+    deleteImageAfterSave(res, previousImage);
   } catch (error) {
     console.error(`Catalog ${collectionName} image could not be saved.`, error);
     return res.status(500).json({ message: 'Image could not be saved.' });
@@ -538,6 +565,7 @@ app.delete('/api/admin/catering-services/:id', authMiddleware, adminOnly, (req, 
   const serviceIndex = state.services.findIndex((item) => Number(item.id) === Number(req.params.id));
   if (serviceIndex < 0) return res.status(404).json({ message: 'Catering service not found.' });
   const [service] = state.services.splice(serviceIndex, 1);
+  deleteImageAfterSave(res, service.image);
   res.json({ id: service.id, deleted: true });
 });
 

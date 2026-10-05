@@ -1,80 +1,83 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { MongoClient } = require('mongodb');
+const { createClient } = require('@supabase/supabase-js');
 
 const localStatePath = path.resolve(
   process.env.DATA_FILE_PATH || path.join(__dirname, 'data', 'state.json')
 );
-const mongoUri = process.env.MONGODB_URI;
-let mongoClient;
-let mongoDatabase;
-
-function getPersistenceMode() {
-  return mongoDatabase ? 'mongodb-atlas' : 'local-json';
-}
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const storageBucket = process.env.SUPABASE_STORAGE_BUCKET || 'cloud-kitchen-assets';
+const hasPartialSupabaseConfiguration = Boolean(supabaseUrl) !== Boolean(supabaseServiceKey);
+let supabase;
 
 function snapshot(state) {
   return JSON.parse(JSON.stringify(state));
 }
 
-async function initializePersistence(state) {
-  if (mongoUri) {
-    mongoClient = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10000 });
-    await mongoClient.connect();
-    mongoDatabase = mongoClient.db(process.env.MONGODB_DATABASE || 'as_cloud_kitchen');
+function getPersistenceMode() {
+  return supabase ? 'supabase-postgres' : 'local-json-development';
+}
 
-    const saved = await mongoDatabase.collection('app_state').find({}).toArray();
-    if (saved.length) {
-      for (const key of Object.keys(state)) {
-        const records = saved.filter((record) => record.key === key);
-        if (Array.isArray(state[key])) {
-          state[key] = records.sort((first, second) => first.index - second.index).map((record) => record.value);
-        } else if (records.length) {
-          state[key] = records[0].value;
-        }
-      }
-      console.log('Loaded Cloud Kitchen state from MongoDB.');
-    } else {
-      await saveState(state);
-      console.log('Initialized MongoDB with the Cloud Kitchen seed data.');
-    }
-    console.log('Persistent storage: MongoDB Atlas.');
+async function loadSupabaseState(state) {
+  const { data, error } = await supabase.rpc('read_application_state');
+  if (error) throw new Error(`Could not load application state from Supabase: ${error.message}`);
+  if (!data) return false;
+
+  for (const key of Object.keys(state)) {
+    if (Object.prototype.hasOwnProperty.call(data, key)) state[key] = data[key];
+  }
+  return true;
+}
+
+async function persistSupabaseState(state) {
+  const { error } = await supabase.rpc('persist_application_state', { p_state: snapshot(state) });
+  if (error) throw new Error(`Could not save application state in Supabase: ${error.message}`);
+}
+
+async function initializePersistence(state) {
+  if (hasPartialSupabaseConfiguration) {
+    throw new Error('Set both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, or unset both for local development.');
+  }
+  if (!supabaseUrl && (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true')) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production; refusing to start with temporary storage.');
+  }
+  if ((process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') && !process.env.ADMIN_PASSWORD) {
+    throw new Error('ADMIN_PASSWORD is required in production.');
+  }
+
+  if (supabaseUrl) {
+    supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
+    const hasSavedState = await loadSupabaseState(state);
+    if (!hasSavedState) await persistSupabaseState(state);
+    console.log('Persistent storage: Supabase PostgreSQL.');
+    console.log(`Persistent image storage: Supabase Storage bucket "${storageBucket}".`);
     return;
   }
 
   if (fs.existsSync(localStatePath)) {
     const saved = JSON.parse(await fs.promises.readFile(localStatePath, 'utf8'));
     Object.assign(state, saved);
-    console.log(`Loaded Cloud Kitchen state from ${localStatePath}.`);
   } else {
     await saveState(state);
-    console.warn('MONGODB_URI is unset; using local JSON persistence. This is not durable on Render.');
   }
+  console.warn('Using local JSON development storage. This mode is not suitable for production.');
+}
+
+async function refreshState(state) {
+  if (supabase) await loadSupabaseState(state);
 }
 
 async function saveState(state) {
-  const data = snapshot(state);
-  if (mongoDatabase) {
-    const collection = mongoDatabase.collection('app_state');
-    const records = Object.entries(data).flatMap(([key, value]) => (
-      Array.isArray(value)
-        ? value.map((item, index) => ({ _id: `${key}:${index}`, key, index, value: item }))
-        : [{ _id: `${key}:singleton`, key, index: 0, value }]
-    ));
-    if (records.length) {
-      await collection.bulkWrite(records.map((record) => ({
-        replaceOne: {
-          filter: { _id: record._id },
-          replacement: { ...record, savedAt: new Date() },
-          upsert: true
-        }
-      })));
-    }
-    await collection.deleteMany({ _id: { $nin: records.map((record) => record._id) } });
+  if (supabase) {
+    await persistSupabaseState(state);
     return;
   }
 
+  const data = snapshot(state);
   await fs.promises.mkdir(path.dirname(localStatePath), { recursive: true });
   const temporaryPath = `${localStatePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(temporaryPath, JSON.stringify(data, null, 2), { flag: 'w' });
@@ -82,7 +85,6 @@ async function saveState(state) {
 }
 
 async function storeImage(file, collectionName) {
-  const id = randomUUID();
   const extension = {
     'image/jpeg': '.jpg',
     'image/png': '.png',
@@ -90,38 +92,44 @@ async function storeImage(file, collectionName) {
   }[file.mimetype];
   if (!extension) throw new Error('Unsupported image type.');
 
-  if (mongoDatabase) {
-    await mongoDatabase.collection('uploaded_images').insertOne({
-      _id: id,
+  const filePath = `${collectionName}/${randomUUID()}${extension}`;
+  if (supabase) {
+    const { error } = await supabase.storage.from(storageBucket).upload(filePath, file.buffer, {
       contentType: file.mimetype,
-      data: file.buffer,
-      createdAt: new Date()
+      upsert: false
     });
-    return `/api/media/${id}`;
+    if (error) throw new Error(`Could not upload image to Supabase Storage: ${error.message}`);
+    const { data } = supabase.storage.from(storageBucket).getPublicUrl(filePath);
+    return data.publicUrl;
   }
 
   const directory = path.resolve(__dirname, '..', 'uploads', collectionName);
   await fs.promises.mkdir(directory, { recursive: true });
-  const filename = `${id}${extension}`;
-  await fs.promises.writeFile(path.join(directory, filename), file.buffer, { flag: 'wx' });
-  return `/uploads/${collectionName}/${filename}`;
+  await fs.promises.writeFile(path.join(directory, path.basename(filePath)), file.buffer, { flag: 'wx' });
+  return `/uploads/${filePath}`;
 }
 
-async function readImage(id) {
-  if (!mongoDatabase) return null;
-  return mongoDatabase.collection('uploaded_images').findOne({ _id: id });
-}
+async function deleteImage(imageUrl) {
+  if (!imageUrl) return;
 
-async function deleteImage(imagePath) {
-  if (!imagePath) return;
-
-  const remoteImage = imagePath.match(/^\/api\/media\/([a-zA-Z0-9-]+)$/);
-  if (remoteImage && mongoDatabase) {
-    await mongoDatabase.collection('uploaded_images').deleteOne({ _id: remoteImage[1] });
+  if (supabase) {
+    const publicPrefix = `/storage/v1/object/public/${storageBucket}/`;
+    const servicePrefix = `/storage/v1/object/${storageBucket}/`;
+    let pathname;
+    try {
+      pathname = new URL(imageUrl).pathname;
+    } catch {
+      return;
+    }
+    const prefix = pathname.includes(publicPrefix) ? publicPrefix : servicePrefix;
+    if (!pathname.includes(prefix)) return;
+    const filePath = decodeURIComponent(pathname.slice(pathname.indexOf(prefix) + prefix.length));
+    const { error } = await supabase.storage.from(storageBucket).remove([filePath]);
+    if (error) throw new Error(`Could not remove the replaced image from Supabase Storage: ${error.message}`);
     return;
   }
 
-  const localImage = imagePath.match(/^\/uploads\/(foods|categories|services|payment|featured-combo)\/([^/]+)$/);
+  const localImage = imageUrl.match(/^\/uploads\/(foods|categories|services|payment|featured-combo)\/([^/]+)$/);
   if (!localImage) return;
   const filePath = path.resolve(__dirname, '..', 'uploads', localImage[1], localImage[2]);
   await fs.promises.unlink(filePath).catch((error) => {
@@ -133,7 +141,7 @@ module.exports = {
   deleteImage,
   getPersistenceMode,
   initializePersistence,
-  readImage,
+  refreshState,
   saveState,
   storeImage
 };

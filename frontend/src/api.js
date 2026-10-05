@@ -12,7 +12,7 @@ function normalizeAssets(value) {
   if (!value || typeof value !== 'object') return value;
 
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
-    if (typeof item === 'string' && (item.startsWith('/uploads/') || item.startsWith('/api/media/'))) {
+    if (typeof item === 'string' && item.startsWith('/uploads/')) {
       return [key, `${API_ORIGIN}${item}`];
     }
     return [key, normalizeAssets(item)];
