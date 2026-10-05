@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useId, useState } from 'react';
+import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload } from './api';
 
 const formatCurrency = (value) =>
@@ -651,12 +651,17 @@ function HomePage({ categories, foodItems, addToCart, featuredCombo = defaultFea
           </div>
           <div className="category-grid">
             {categories.filter((category) => category.featured !== false).map((category) => (
-              <div key={category.id} className="category-card">
-                <img src={category.image} alt={category.name} />
+              <Link
+                key={category.id}
+                to={`/menu?category=${encodeURIComponent(category.id)}`}
+                className={`category-card${category.image ? '' : ' no-image'}`}
+                aria-label={`Browse ${category.name}`}
+              >
+                {category.image && <img src={category.image} alt={category.name} />}
                 <div className="category-overlay">
                   <span>{category.name}</span>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -680,10 +685,21 @@ function HomePage({ categories, foodItems, addToCart, featuredCombo = defaultFea
 }
 
 function MenuPage({ categories, foodItems, addToCart }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('all');
+  const category = searchParams.get('category') || 'all';
   const [vegOnly, setVegOnly] = useState(false);
   const [sortBy, setSortBy] = useState('featured');
+
+  const updateCategory = (value) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (value === 'all') {
+      nextParams.delete('category');
+    } else {
+      nextParams.set('category', value);
+    }
+    setSearchParams(nextParams);
+  };
 
   const filtered = foodItems
     .filter((food) => {
@@ -708,7 +724,7 @@ function MenuPage({ categories, foodItems, addToCart }) {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
-        <select value={category} onChange={(event) => setCategory(event.target.value)}>
+        <select value={category} onChange={(event) => updateCategory(event.target.value)}>
           <option value="all">All Categories</option>
           {categories.map((item) => (
             <option key={item.id} value={item.id}>{item.name}</option>
@@ -731,6 +747,12 @@ function MenuPage({ categories, foodItems, addToCart }) {
           <FoodCard key={food.id} food={food} addToCart={addToCart} />
         ))}
       </div>
+      {!filtered.length && (
+        <div className="empty-state">
+          <p>No food items match this category or your current filters.</p>
+          <Link to="/menu" className="button secondary">Browse all food</Link>
+        </div>
+      )}
     </div>
   );
 }
@@ -2025,7 +2047,7 @@ function AddFoodForm({ categories, onCreate, onCancel }) {
       <textarea name="description" value={form.description} onChange={handleChange} placeholder="Food description" rows="2" />
       <input name="ingredients" value={form.ingredients} onChange={handleChange} placeholder="Ingredients, separated by commas" />
       <div className="catalog-options">
-        <label className="checkbox-row"><input type="checkbox" name="veg" checked={form.veg} onChange={handleChange} /> Vegetarian</label>
+        <FoodTypeField value={form.veg} onChange={(veg) => setForm((current) => ({ ...current, veg }))} />
         <label className="checkbox-row"><input type="checkbox" name="featured" checked={form.featured} onChange={handleChange} /> Show in Popular Items</label>
         <label className="checkbox-row"><input type="checkbox" checked={form.availability === 'available'} onChange={(event) => setForm((current) => ({ ...current, availability: event.target.checked ? 'available' : 'out_of_stock' }))} /> Available to order</label>
       </div>
@@ -2044,6 +2066,23 @@ function AddFoodForm({ categories, onCreate, onCancel }) {
         <button className="button ghost" type="button" onClick={onCancel}>Cancel</button>
       </div>
     </form>
+  );
+}
+
+function FoodTypeField({ value, onChange }) {
+  const groupId = useId();
+  return (
+    <fieldset className="food-type-field">
+      <legend>Food type</legend>
+      <label className={`food-type-choice veg-choice${value ? ' selected' : ''}`}>
+        <input type="radio" name={`food-type-${groupId}`} checked={value} onChange={() => onChange(true)} />
+        Veg
+      </label>
+      <label className={`food-type-choice non-veg-choice${!value ? ' selected' : ''}`}>
+        <input type="radio" name={`food-type-${groupId}`} checked={!value} onChange={() => onChange(false)} />
+        Non-Veg
+      </label>
+    </fieldset>
   );
 }
 
@@ -2161,6 +2200,7 @@ function FoodManagementRow({ food, categories, onFoodUpdate, onFoodDelete, onPri
       <div className="food-management-details">
         <strong>{food.name}</strong>
         <span>{food.categoryName || 'Menu item'}</span>
+        <span className={`admin-food-type ${food.veg ? 'veg' : 'non-veg'}`}>{food.veg ? 'Veg' : 'Non-Veg'}</span>
         <span>{formatPortion(food) ? `Serving size: ${formatPortion(food)}` : 'Serving size not set'}</span>
         <button className="text-button edit-details-button" type="button" onClick={() => setEditing((value) => !value)}>
           {editing ? 'Close details' : 'Edit details'}
@@ -2237,7 +2277,7 @@ function FoodManagementRow({ food, categories, onFoodUpdate, onFoodDelete, onPri
           <textarea value={details.description} onChange={(event) => setDetails((current) => ({ ...current, description: event.target.value }))} placeholder="Food description" rows="2" />
           <input value={details.ingredients} onChange={(event) => setDetails((current) => ({ ...current, ingredients: event.target.value }))} placeholder="Ingredients, separated by commas" />
           <div className="catalog-options">
-            <label className="checkbox-row"><input type="checkbox" checked={details.veg} onChange={(event) => setDetails((current) => ({ ...current, veg: event.target.checked }))} /> Vegetarian</label>
+            <FoodTypeField value={details.veg} onChange={(veg) => setDetails((current) => ({ ...current, veg }))} />
             <label className="checkbox-row"><input type="checkbox" checked={details.featured} onChange={(event) => setDetails((current) => ({ ...current, featured: event.target.checked }))} /> Show in Popular Items</label>
             <label className="checkbox-row"><input type="checkbox" checked={details.availability === 'available'} onChange={(event) => setDetails((current) => ({ ...current, availability: event.target.checked ? 'available' : 'out_of_stock' }))} /> Available to order</label>
           </div>
@@ -2422,7 +2462,9 @@ function CategoryManagementRow({ category, onUpdate, onDelete, onImageUpload }) 
 
   return (
     <article className="category-management-row">
-      <img className="category-management-image" src={previewUrl || category.image} alt={category.name} />
+      {previewUrl || category.image
+        ? <img className="category-management-image" src={previewUrl || category.image} alt={category.name} />
+        : <div className="category-management-image category-management-image-placeholder" aria-label={`${category.name} image not uploaded`}>{category.name.charAt(0)}</div>}
       <form className="category-edit-fields" onSubmit={save}>
         <input value={name} onChange={(event) => setName(event.target.value)} aria-label={`${category.name} category name`} required />
         <div className="catalog-options">

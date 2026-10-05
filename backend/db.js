@@ -74,7 +74,8 @@ function seedData() {
     { id: 7, name: 'Burgers', image: '', status: 'active', featured: true },
     { id: 8, name: 'Snacks', image: '', status: 'active', featured: true },
     { id: 9, name: 'Desserts', image: '', status: 'active', featured: true },
-    { id: 10, name: 'Beverages', image: '', status: 'active', featured: true }
+    { id: 10, name: 'Beverages', image: '', status: 'active', featured: true },
+    { id: 11, name: 'Pickles', image: '', status: 'active', featured: true }
   ];
 
   state.foodItems = [
@@ -328,6 +329,10 @@ function seedData() {
   const dessertCategory = state.categories.find((category) => Number(category.id) === 9);
   if (dessertCategory) {
     dessertCategory.image = 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?auto=format&fit=crop&w=900&q=80';
+  }
+  const picklesCategory = state.categories.find((category) => Number(category.id) === 11);
+  if (picklesCategory) {
+    picklesCategory.image = 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=900&q=80';
   }
 
   state.coupons = [

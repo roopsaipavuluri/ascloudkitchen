@@ -455,10 +455,27 @@ button {
 
 .category-card {
   position: relative;
+  display: block;
   overflow: hidden;
   border-radius: 22px;
   height: 220px;
   box-shadow: var(--shadow-soft);
+  cursor: pointer;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.category-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 22px 48px rgba(77, 53, 29, 0.16);
+}
+
+.category-card:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 4px;
+}
+
+.category-card.no-image {
+  background: linear-gradient(135deg, #fff8f0, #f5ebdd 58%, #e8dccb);
 }
 
 .category-card img {
@@ -477,6 +494,24 @@ button {
   padding: 18px;
   color: white;
   font-weight: 700;
+}
+
+.category-card.no-image .category-overlay {
+  background: linear-gradient(180deg, transparent, rgba(23, 23, 23, 0.24));
+  color: var(--color-secondary);
+}
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin-top: 28px;
+  padding: 32px;
+  border: 1px solid var(--color-line);
+  border-radius: 18px;
+  background: var(--color-panel);
+  color: var(--color-muted);
+  text-align: center;
 }
 
 .product-grid {
@@ -1254,6 +1289,72 @@ button {
   background: var(--color-surface);
 }
 
+.food-type-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 220px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.food-type-field legend {
+  width: 100%;
+  margin-bottom: 5px;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.food-type-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.food-type-choice input {
+  accent-color: var(--color-success);
+}
+
+.food-type-choice.veg-choice.selected {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.food-type-choice.non-veg-choice input {
+  accent-color: var(--color-danger);
+}
+
+.food-type-choice.non-veg-choice.selected {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.admin-food-type {
+  justify-self: start;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.admin-food-type.veg {
+  background: rgba(46, 155, 98, 0.12);
+  color: var(--color-success);
+}
+
+.admin-food-type.non-veg {
+  background: rgba(217, 74, 58, 0.12);
+  color: var(--color-danger);
+}
+
 .catalog-image-picker {
   display: flex;
   align-items: center;
@@ -1361,6 +1462,14 @@ button {
   border-radius: 12px;
   object-fit: cover;
   background: var(--color-surface-alt);
+}
+
+.category-management-image-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--color-secondary);
+  font-size: 1.5rem;
+  font-weight: 700;
 }
 
 .category-edit-fields {
