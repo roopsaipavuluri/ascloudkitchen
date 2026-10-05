@@ -10,6 +10,7 @@ const { randomBytes } = require('crypto');
 const { state, seedData } = require('./db');
 const {
   deleteImage,
+  getPersistenceMode,
   initializePersistence,
   readImage,
   saveState,
@@ -254,7 +255,11 @@ function parseServicePayload(payload, existing = {}) {
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Cloud Kitchen API is running.' });
+  res.json({
+    status: 'ok',
+    message: 'Cloud Kitchen API is running.',
+    storage: getPersistenceMode()
+  });
 });
 
 app.get('/api/featured-combo', (req, res) => {

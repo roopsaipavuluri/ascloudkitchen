@@ -10,6 +10,10 @@ const mongoUri = process.env.MONGODB_URI;
 let mongoClient;
 let mongoDatabase;
 
+function getPersistenceMode() {
+  return mongoDatabase ? 'mongodb-atlas' : 'local-json';
+}
+
 function snapshot(state) {
   return JSON.parse(JSON.stringify(state));
 }
@@ -127,6 +131,7 @@ async function deleteImage(imagePath) {
 
 module.exports = {
   deleteImage,
+  getPersistenceMode,
   initializePersistence,
   readImage,
   saveState,
