@@ -1,5 +1,6 @@
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
-const API_BASE = configuredApiBase || '/api';
+const API_BASE = configuredApiBase
+  || (import.meta.env.PROD ? 'https://ascloudkitchen.onrender.com/api' : '/api');
 const API_ORIGIN = /^https?:\/\//i.test(API_BASE) ? new URL(API_BASE).origin : '';
 
 function apiUrl(endpoint) {

@@ -61,7 +61,7 @@ Use MySQL in a hosted environment and import `database/schema.sql` to initialize
 ## Deployment Notes
 
 - A Render Blueprint is provided in `render.yaml`. In Render, create a new Blueprint from this GitHub repository and set the prompted `ADMIN_PASSWORD` to a strong private value. Render generates `JWT_SECRET` and uses the live Vercel origin for CORS. After deployment, confirm `https://<render-service>.onrender.com/api/health` returns `{"status":"ok"}`.
-- In the Vercel project, add `VITE_API_BASE_URL` with the full Render API URL ending in `/api` (for example, `https://<render-service>.onrender.com/api`), then redeploy the frontend. Without this setting, production requests go to the frontend host and return 404.
+- The production frontend defaults to `https://ascloudkitchen.onrender.com/api`. If the backend URL changes, set `VITE_API_BASE_URL` in Vercel to the replacement API URL ending in `/api`, then redeploy the frontend.
 - Keep `VITE_API_BASE_URL` blank for local Vite development; `vite.config.js` proxies API and upload requests to `http://localhost:5000`.
 - Set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, and the backend's `CLIENT_URL` on the backend host. Allow the frontend origin in the backend CORS configuration.
 - Keep all secrets in environment variables.
