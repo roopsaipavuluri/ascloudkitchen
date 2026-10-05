@@ -36,6 +36,78 @@ async function persistSupabaseState(state) {
   if (error) throw new Error(`Could not save application state in Supabase: ${error.message}`);
 }
 
+function toMenuRecord(item, categoryName) {
+  return {
+    app_id: Number(item.id),
+    name: item.name,
+    description: item.description || '',
+    price: Number(item.price),
+    category: categoryName || item.categoryName || 'General',
+    image_url: item.image || null,
+    rating: Number(item.rating || 0),
+    serving_size: [item.portionAmount, item.portionUnit].filter(Boolean).join(' '),
+    is_veg: item.veg !== false,
+    is_featured: item.featured === true,
+    available: item.availability !== 'out_of_stock',
+    details: snapshot(item)
+  };
+}
+
+function fromMenuRecord(record, categories) {
+  const details = record.details && typeof record.details === 'object' ? record.details : {};
+  const category = categories.find((item) => item.name === record.category);
+  return {
+    ...details,
+    id: Number(record.app_id),
+    categoryId: details.categoryId ?? category?.id,
+    name: record.name,
+    description: record.description || '',
+    price: Number(record.price),
+    categoryName: record.category || category?.name || 'General',
+    image: record.image_url || '',
+    rating: Number(record.rating || 0),
+    veg: record.is_veg,
+    featured: record.is_featured,
+    available: record.available,
+    availability: record.available ? 'available' : 'out_of_stock'
+  };
+}
+
+async function loadMenuItems(state) {
+  const { data, error } = await supabase
+    .from('menu_items')
+    .select('*')
+    .order('app_id', { ascending: true });
+  if (error) throw new Error(`Could not load menu items from Supabase: ${error.message}`);
+  state.foodItems = data.map((item) => fromMenuRecord(item, state.categories));
+}
+
+async function insertMenuItem(item, categoryName) {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('menu_items')
+    .insert(toMenuRecord(item, categoryName));
+  if (error) throw new Error(`Could not insert menu item in Supabase: ${error.message}`);
+}
+
+async function updateMenuItem(item, categoryName) {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('menu_items')
+    .update(toMenuRecord(item, categoryName))
+    .eq('app_id', Number(item.id));
+  if (error) throw new Error(`Could not update menu item in Supabase: ${error.message}`);
+}
+
+async function deleteMenuItem(id) {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('menu_items')
+    .delete()
+    .eq('app_id', Number(id));
+  if (error) throw new Error(`Could not delete menu item from Supabase: ${error.message}`);
+}
+
 async function initializePersistence(state) {
   if (hasPartialSupabaseConfiguration) {
     throw new Error('Set both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, or unset both for local development.');
@@ -68,7 +140,10 @@ async function initializePersistence(state) {
 }
 
 async function refreshState(state) {
-  if (supabase) await loadSupabaseState(state);
+  if (supabase) {
+    await loadSupabaseState(state);
+    await loadMenuItems(state);
+  }
 }
 
 async function saveState(state) {
@@ -139,9 +214,13 @@ async function deleteImage(imageUrl) {
 
 module.exports = {
   deleteImage,
+  deleteMenuItem,
   getPersistenceMode,
+  insertMenuItem,
   initializePersistence,
   refreshState,
   saveState,
-  storeImage
+  storeImage,
+  toMenuRecord,
+  updateMenuItem
 };

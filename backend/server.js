@@ -10,11 +10,14 @@ const { randomBytes } = require('crypto');
 const { state, seedData } = require('./db');
 const {
   deleteImage,
+  deleteMenuItem,
   getPersistenceMode,
   initializePersistence,
+  insertMenuItem,
   refreshState,
   saveState,
-  storeImage
+  storeImage,
+  updateMenuItem
 } = require('./persistence');
 
 const app = express();
@@ -455,7 +458,7 @@ app.delete('/api/admin/categories/:id', authMiddleware, adminOnly, (req, res) =>
   res.json({ id: categoryId, deleted: true });
 });
 
-app.post('/api/admin/food', authMiddleware, adminOnly, (req, res) => {
+app.post('/api/admin/food', authMiddleware, adminOnly, async (req, res) => {
   const parsed = parseFoodPayload(req.body);
   if (parsed.error) return res.status(400).json({ message: parsed.error });
 
@@ -464,14 +467,21 @@ app.post('/api/admin/food', authMiddleware, adminOnly, (req, res) => {
     ...parsed.value,
     rating: 0
   };
+  const categoryName = state.categories.find((category) => Number(category.id) === Number(food.categoryId))?.name || 'General';
+  try {
+    await insertMenuItem(food, categoryName);
+  } catch (error) {
+    console.error('Food item could not be inserted in persistent storage.', error);
+    return res.status(500).json({ message: 'Food item could not be saved. Please retry.' });
+  }
   state.foodItems.push(food);
   res.status(201).json({
     ...food,
-    categoryName: state.categories.find((category) => Number(category.id) === Number(food.categoryId))?.name || 'General'
+    categoryName
   });
 });
 
-app.patch('/api/admin/food/:id', authMiddleware, adminOnly, (req, res) => {
+app.patch('/api/admin/food/:id', authMiddleware, adminOnly, async (req, res) => {
   const food = state.foodItems.find((item) => Number(item.id) === Number(req.params.id));
   if (!food) {
     return res.status(404).json({ message: 'Food item not found.' });
@@ -479,15 +489,30 @@ app.patch('/api/admin/food/:id', authMiddleware, adminOnly, (req, res) => {
 
   const parsed = parseFoodPayload(req.body, food);
   if (parsed.error) return res.status(400).json({ message: parsed.error });
+  const updatedFood = { ...food, ...parsed.value };
+  const categoryName = state.categories.find((category) => Number(category.id) === Number(updatedFood.categoryId))?.name || 'General';
+  try {
+    await updateMenuItem(updatedFood, categoryName);
+  } catch (error) {
+    console.error('Food item could not be updated in persistent storage.', error);
+    return res.status(500).json({ message: 'Food item could not be saved. Please retry.' });
+  }
   Object.assign(food, parsed.value);
   res.json(food);
 });
 
-app.delete('/api/admin/food/:id', authMiddleware, adminOnly, (req, res) => {
+app.delete('/api/admin/food/:id', authMiddleware, adminOnly, async (req, res) => {
   const foodIndex = state.foodItems.findIndex((item) => Number(item.id) === Number(req.params.id));
   if (foodIndex < 0) return res.status(404).json({ message: 'Food item not found.' });
 
-  const [food] = state.foodItems.splice(foodIndex, 1);
+  const food = state.foodItems[foodIndex];
+  try {
+    await deleteMenuItem(food.id);
+  } catch (error) {
+    console.error('Food item could not be deleted from persistent storage.', error);
+    return res.status(500).json({ message: 'Food item could not be deleted. Please retry.' });
+  }
+  state.foodItems.splice(foodIndex, 1);
   deleteImageAfterSave(res, food.image);
   res.json({ id: food.id, deleted: true });
 });
@@ -505,12 +530,24 @@ async function saveCatalogImage(req, res, collectionName, collection, id) {
   if (!req.file) return res.status(400).json({ message: 'Choose an image to upload.' });
 
   if (!validateImageBuffer(req.file)) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
+  const previousImage = record.image;
+  let newImage;
   try {
-    const previousImage = record.image;
-    record.image = await storeImage(req.file, collectionName);
-    deleteNewImageIfSaveFails(res, record.image);
+    newImage = await storeImage(req.file, collectionName);
+    if (collectionName === 'foods') {
+      const categoryName = state.categories.find((category) => Number(category.id) === Number(record.categoryId))?.name || 'General';
+      await updateMenuItem({ ...record, image: newImage }, categoryName);
+    } else {
+      deleteNewImageIfSaveFails(res, newImage);
+    }
+    record.image = newImage;
     deleteImageAfterSave(res, previousImage);
   } catch (error) {
+    if (newImage && collectionName === 'foods') {
+      await deleteImage(newImage).catch((cleanupError) => {
+        console.error('A new menu image could not be removed after its database update failed.', cleanupError);
+      });
+    }
     console.error(`Catalog ${collectionName} image could not be saved.`, error);
     return res.status(500).json({ message: 'Image could not be saved.' });
   }

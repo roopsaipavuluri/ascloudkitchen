@@ -43,6 +43,97 @@ create table if not exists public.food_items (
 create index if not exists food_items_category_id_idx on public.food_items(category_id);
 create index if not exists food_items_available_featured_idx on public.food_items(availability, featured);
 
+create table if not exists public.menu_items (
+  id uuid primary key default gen_random_uuid(),
+  app_id bigint not null,
+  name text not null,
+  description text not null default '',
+  price numeric(10, 2) not null check (price >= 0),
+  category text not null default '',
+  image_url text,
+  rating numeric(3, 2) not null default 0 check (rating >= 0 and rating <= 5),
+  serving_size text not null default '',
+  is_veg boolean not null default true,
+  is_featured boolean not null default false,
+  available boolean not null default true,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.menu_items add column if not exists app_id bigint;
+alter table public.menu_items add column if not exists details jsonb not null default '{}'::jsonb;
+update public.menu_items set details = '{}'::jsonb where details is null;
+alter table public.menu_items alter column details set default '{}'::jsonb;
+alter table public.menu_items alter column details set not null;
+
+with missing_ids as (
+  select id, row_number() over (order by created_at, id::text) as row_number
+  from public.menu_items
+  where app_id is null
+), current_max as (
+  select coalesce(max(app_id), 0) as app_id
+  from public.menu_items
+)
+update public.menu_items as menu
+set app_id = current_max.app_id + missing_ids.row_number
+from missing_ids
+cross join current_max
+where menu.id = missing_ids.id;
+
+alter table public.menu_items alter column app_id set not null;
+create unique index if not exists menu_items_app_id_idx on public.menu_items(app_id);
+
+update public.menu_items as menu
+set details = jsonb_build_object(
+  'id', menu.app_id,
+  'name', menu.name,
+  'description', menu.description,
+  'price', menu.price,
+  'categoryId', (
+    select category.id
+    from public.categories as category
+    where category.name = menu.category
+  ),
+  'image', coalesce(menu.image_url, ''),
+  'veg', menu.is_veg,
+  'rating', menu.rating,
+  'featured', menu.is_featured,
+  'availability', case when menu.available then 'available' else 'out_of_stock' end
+) || menu.details
+where menu.details = '{}'::jsonb;
+
+create index if not exists menu_items_category_available_idx
+  on public.menu_items(category, available);
+
+insert into public.menu_items (
+  app_id, name, description, price, category, image_url, rating, serving_size,
+  is_veg, is_featured, available, details
+)
+select
+  food.id,
+  food.name,
+  food.description,
+  food.price,
+  category.name,
+  food.image_url,
+  coalesce((food.details->>'rating')::numeric, 0),
+  coalesce(
+    nullif(concat_ws(
+      ' ',
+      nullif(food.details->>'portionAmount', ''),
+      nullif(food.details->>'portionUnit', '')
+    ), ''),
+    ''
+  ),
+  food.veg,
+  food.featured,
+  food.availability = 'available',
+  food.details
+from public.food_items as food
+join public.categories as category on category.id = food.category_id
+on conflict (app_id) do nothing;
+
 create table if not exists public.catering_services (
   id bigint primary key,
   name text not null unique,
@@ -91,6 +182,7 @@ as $$
   select case
     when not exists (select 1 from public.categories)
       and not exists (select 1 from public.food_items)
+      and not exists (select 1 from public.menu_items)
       and not exists (select 1 from public.catering_services)
       and not exists (select 1 from public.website_settings)
       and not exists (select 1 from public.app_records)
@@ -110,23 +202,27 @@ as $$
       ), '[]'::jsonb),
       'foodItems', coalesce((
         select jsonb_agg(
-          food.details || jsonb_build_object(
-            'id', food.id,
-            'categoryId', food.category_id,
-            'name', food.name,
-            'description', food.description,
-            'price', food.price,
-            'discountPrice', food.discount_price,
-            'image', coalesce(food.image_url, ''),
-            'veg', food.veg,
-            'ingredients', food.ingredients,
-            'preparationTime', food.preparation_time,
-            'availability', food.availability,
-            'featured', food.featured,
-            'stock', food.stock
-          ) order by food.id
+          menu.details || jsonb_build_object(
+            'id', menu.app_id,
+            'categoryId', coalesce(
+              menu.details->'categoryId',
+              to_jsonb((
+                select category.id
+                from public.categories as category
+                where category.name = menu.category
+              ))
+            ),
+            'name', menu.name,
+            'description', menu.description,
+            'price', menu.price,
+            'image', coalesce(menu.image_url, ''),
+            'veg', menu.is_veg,
+            'rating', menu.rating,
+            'featured', menu.is_featured,
+            'availability', case when menu.available then 'available' else 'out_of_stock' end
+          ) order by menu.app_id
         )
-        from public.food_items as food
+        from public.menu_items as menu
       ), '[]'::jsonb),
       'services', coalesce((
         select jsonb_agg(
@@ -231,6 +327,58 @@ begin
     where (item->>'id')::bigint = food.id
   );
 
+  insert into public.menu_items (
+    app_id, name, description, price, category, image_url, rating, serving_size,
+    is_veg, is_featured, available, details
+  )
+  select
+    (item->>'id')::bigint,
+    item->>'name',
+    coalesce(item->>'description', ''),
+    (item->>'price')::numeric,
+    coalesce((
+      select category.name
+      from public.categories as category
+      where category.id = (item->>'categoryId')::bigint
+    ), 'General'),
+    nullif(item->>'image', ''),
+    coalesce((item->>'rating')::numeric, 0),
+    coalesce(
+      nullif(concat_ws(
+        ' ',
+        nullif(item->>'portionAmount', ''),
+        nullif(item->>'portionUnit', '')
+      ), ''),
+      ''
+    ),
+    coalesce((item->>'veg')::boolean, true),
+    coalesce((item->>'featured')::boolean, false),
+    coalesce(
+      (item->>'available')::boolean,
+      coalesce(item->>'availability', 'available') = 'available'
+    ),
+    item
+  from jsonb_array_elements(coalesce(p_state->'foodItems', '[]'::jsonb)) as items(item)
+  on conflict (app_id) do update set
+    name = excluded.name,
+    description = excluded.description,
+    price = excluded.price,
+    category = excluded.category,
+    image_url = excluded.image_url,
+    rating = excluded.rating,
+    serving_size = excluded.serving_size,
+    is_veg = excluded.is_veg,
+    is_featured = excluded.is_featured,
+    available = excluded.available,
+    details = excluded.details;
+
+  delete from public.menu_items as menu
+  where not exists (
+    select 1
+    from jsonb_array_elements(coalesce(p_state->'foodItems', '[]'::jsonb)) as items(item)
+    where (item->>'id')::bigint = menu.app_id
+  );
+
   delete from public.categories as category
   where not exists (
     select 1
@@ -309,6 +457,10 @@ drop trigger if exists food_items_set_updated_at on public.food_items;
 create trigger food_items_set_updated_at before update on public.food_items
 for each row execute function public.set_updated_at();
 
+drop trigger if exists menu_items_set_updated_at on public.menu_items;
+create trigger menu_items_set_updated_at before update on public.menu_items
+for each row execute function public.set_updated_at();
+
 drop trigger if exists catering_services_set_updated_at on public.catering_services;
 create trigger catering_services_set_updated_at before update on public.catering_services
 for each row execute function public.set_updated_at();
@@ -323,11 +475,12 @@ for each row execute function public.set_updated_at();
 
 alter table public.categories enable row level security;
 alter table public.food_items enable row level security;
+alter table public.menu_items enable row level security;
 alter table public.catering_services enable row level security;
 alter table public.website_settings enable row level security;
 alter table public.app_records enable row level security;
 
-revoke all on public.categories, public.food_items, public.catering_services,
+revoke all on public.categories, public.food_items, public.menu_items, public.catering_services,
   public.website_settings, public.app_records from anon, authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

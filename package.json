@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "concurrently \"node backend/server.js\" \"npm --prefix frontend run dev -- --host 0.0.0.0\"",
     "server": "node backend/server.js",
+    "migrate:live-data": "node scripts/migrate-live-admin-data.js",
+    "import:state-menu": "node scripts/import-state-menu.js",
     "build": "npm --prefix frontend run build",
     "start": "node backend/server.js"
   },
