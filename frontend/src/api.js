@@ -1,4 +1,22 @@
-const API_BASE = '/api';
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
+const API_BASE = configuredApiBase || '/api';
+const API_ORIGIN = /^https?:\/\//i.test(API_BASE) ? new URL(API_BASE).origin : '';
+
+function apiUrl(endpoint) {
+  return `${API_BASE}${endpoint}`;
+}
+
+function normalizeAssets(value) {
+  if (Array.isArray(value)) return value.map(normalizeAssets);
+  if (!value || typeof value !== 'object') return value;
+
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (typeof item === 'string' && item.startsWith('/uploads/')) {
+      return [key, `${API_ORIGIN}${item}`];
+    }
+    return [key, normalizeAssets(item)];
+  }));
+}
 
 async function request(endpoint, options = {}, token) {
   const headers = {
@@ -10,18 +28,31 @@ async function request(endpoint, options = {}, token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload.message || 'Request failed.');
+  let response;
+  try {
+    response = await fetch(apiUrl(endpoint), {
+      ...options,
+      headers
+    });
+  } catch {
+    throw new Error(
+      `Could not reach the Cloud Kitchen API at ${API_BASE}. Check the deployed backend URL and confirm the backend is running.`
+    );
   }
 
-  return payload;
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    if (payload && typeof payload.message === 'string') throw new Error(payload.message);
+    if (response.status === 404) {
+      throw new Error(
+        `The API route ${endpoint} was not found. Set VITE_API_BASE_URL to your deployed backend API URL (ending in /api) and redeploy the frontend.`
+      );
+    }
+    throw new Error(`API request failed with HTTP ${response.status} for ${endpoint}.`);
+  }
+
+  return normalizeAssets(payload);
 }
 
 export function apiGet(endpoint, token) {
@@ -49,16 +80,24 @@ export async function apiUpload(endpoint, file, token) {
   const formData = new FormData();
   formData.append('image', file);
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: formData
-  });
-  const payload = await response.json().catch(() => ({}));
+  let response;
+  try {
+    response = await fetch(apiUrl(endpoint), {
+      method: 'POST',
+      headers,
+      body: formData
+    });
+  } catch {
+    throw new Error(
+      `Could not reach the Cloud Kitchen API at ${API_BASE}. Check the deployed backend URL and confirm the backend is running.`
+    );
+  }
+  const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(payload.message || 'Image upload failed.');
+    if (payload && typeof payload.message === 'string') throw new Error(payload.message);
+    throw new Error(`Image upload failed with HTTP ${response.status} for ${endpoint}.`);
   }
 
-  return payload;
+  return normalizeAssets(payload);
 }

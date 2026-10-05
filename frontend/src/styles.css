@@ -357,6 +357,15 @@ button {
 
 }
 
+.hero-combo-image {
+  display: block;
+  width: 100%;
+  max-height: 190px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+
 .hero-card .badge {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
@@ -1197,6 +1206,26 @@ button {
   color: var(--color-muted);
 }
 
+.featured-combo-fields {
+  grid-template-columns: 1fr 1.4fr 0.6fr;
+}
+
+.featured-combo-image-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.featured-combo-image-controls > img {
+  width: 100px;
+  height: 72px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  object-fit: cover;
+}
+
 .payment-settings-form > textarea,
 .payment-settings-form input:not([type="checkbox"]) {
   width: 100%;
@@ -1519,7 +1548,8 @@ button {
 
   .category-create-controls,
   .catalog-form-grid,
-  .catering-form-grid {
+  .catering-form-grid,
+  .featured-combo-fields {
     grid-template-columns: 1fr;
   }
 

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: as-cloud-kitchen-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: ADMIN_EMAIL
+        value: ascloudkitchenofficial@gmail.com
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLIENT_URL
+        value: https://ascloudkitchen-wqy2.vercel.app

@@ -52,7 +52,7 @@ A full-stack food ordering platform built with React, Express, and a MySQL-ready
 
 The seeded admin email defaults to `ascloudkitchenofficial@gmail.com`; its password is configured in `.env`. The demo customer credentials are `demo@cloudkitchen.com` / `demo123` and should only be used for local demonstration.
 
-In `/admin`, manage food items, categories, catering services, and checkout payment details: add/edit/delete menu items, update prices and food images, set a serving size in grams or kilograms, manage featured categories, and add/edit/delete catering services with image uploads and visibility controls. Catering starting prices are maintained in admin only and are not shown on the public Events & Catering page. Payment settings control checkout's COD/online choices and the UPI ID and/or QR code shown to customers. JPEG, PNG, or WebP images (up to 5 MB) are saved under `uploads/foods/`, `uploads/categories/`, `uploads/services/`, and `uploads/payment/`. Demo catalog and payment settings use in-memory state and reset when the backend restarts; connect the existing MySQL schema before relying on persistent production changes. Change the admin password before exposing a deployment publicly.
+In `/admin`, manage food items, categories, catering services, the homepage Popular This Week combo, and checkout payment details: add/edit/delete menu items, update prices and food images, set a serving size in grams or kilograms, manage featured categories and combo title/description/price/image, and add/edit/delete catering services with image uploads and visibility controls. Catering starting prices are maintained in admin only and are not shown on the public Events & Catering page. Payment settings control checkout's COD/online choices and the UPI ID and/or QR code shown to customers. JPEG, PNG, or WebP images (up to 5 MB) are saved under `uploads/foods/`, `uploads/categories/`, `uploads/services/`, `uploads/payment/`, and `uploads/featured-combo/`. Demo catalog and payment settings use in-memory state and reset when the backend restarts; connect the existing MySQL schema before relying on persistent production catalog changes. Change the admin password before exposing a deployment publicly.
 
 ## Production / MySQL Deployment
 
@@ -60,10 +60,13 @@ Use MySQL in a hosted environment and import `database/schema.sql` to initialize
 
 ## Deployment Notes
 
-- Frontend can be deployed on Vercel or Netlify.
-- Backend can be deployed on Render, Railway, DigitalOcean App Platform, or similar.
+- A Render Blueprint is provided in `render.yaml`. In Render, create a new Blueprint from this GitHub repository and set the prompted `ADMIN_PASSWORD` to a strong private value. Render generates `JWT_SECRET` and uses the live Vercel origin for CORS. After deployment, confirm `https://<render-service>.onrender.com/api/health` returns `{"status":"ok"}`.
+- In the Vercel project, add `VITE_API_BASE_URL` with the full Render API URL ending in `/api` (for example, `https://<render-service>.onrender.com/api`), then redeploy the frontend. Without this setting, production requests go to the frontend host and return 404.
+- Keep `VITE_API_BASE_URL` blank for local Vite development; `vite.config.js` proxies API and upload requests to `http://localhost:5000`.
+- Set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `JWT_SECRET`, and the backend's `CLIENT_URL` on the backend host. Allow the frontend origin in the backend CORS configuration.
 - Keep all secrets in environment variables.
 - Do not hardcode localhost URLs in production.
+- The current demo backend stores catalog, orders, payment settings, and combo data in memory, and uploaded images on local disk. Render's free service has ephemeral storage and may sleep; use persistent database and file storage before relying on admin edits or orders in production.
 
 ## Notes
 

@@ -16,6 +16,14 @@ const emptyPaymentSettings = {
   qrCodeImage: ''
 };
 
+const defaultFeaturedCombo = {
+  label: 'Popular this week',
+  name: 'Chef Special Combo',
+  description: 'Paneer Platter + Biryani + Mango Lassi',
+  price: 699,
+  image: ''
+};
+
 const formatPortion = (food) => (
   Number(food.portionAmount) > 0 ? `${food.portionAmount} ${food.portionUnit || 'g'}` : ''
 );
@@ -30,6 +38,7 @@ function App() {
   const [foodItems, setFoodItems] = useState([]);
   const [services, setServices] = useState([]);
   const [paymentSettings, setPaymentSettings] = useState(emptyPaymentSettings);
+  const [featuredCombo, setFeaturedCombo] = useState(defaultFeaturedCombo);
   const [catalogReady, setCatalogReady] = useState(false);
   const [minimumSplashTimeElapsed, setMinimumSplashTimeElapsed] = useState(false);
   const [introEnabled] = useState(() => !document.documentElement.classList.contains('intro-seen'));
@@ -44,6 +53,7 @@ function App() {
     foodItems: [],
     services: [],
     paymentSettings: emptyPaymentSettings,
+    featuredCombo: defaultFeaturedCombo,
     orders: [],
     partyOrders: [],
     cateringRequests: [],
@@ -82,15 +92,17 @@ function App() {
   useEffect(() => {
     const loadCatalog = async () => {
       try {
-        const [categoriesResponse, foodResponse, servicesResponse] = await Promise.all([
+        const [categoriesResponse, foodResponse, servicesResponse, featuredComboResponse] = await Promise.all([
           apiGet('/categories'),
           apiGet('/food'),
-          apiGet('/catering-services')
+          apiGet('/catering-services'),
+          apiGet('/featured-combo')
         ]);
 
         setCategories(categoriesResponse);
         setFoodItems(foodResponse);
         setServices(servicesResponse);
+        setFeaturedCombo(featuredComboResponse);
       } catch (error) {
         console.error('Catalog load failed', error);
       } finally {
@@ -136,12 +148,13 @@ function App() {
     if (!providedToken || !user || user.role !== 'admin') return;
 
     try {
-      const [summary, categoriesResp, foodResp, servicesResp, paymentSettingsResp, ordersResp, partyOrders, cateringRequests, customerList, messages] = await Promise.all([
+      const [summary, categoriesResp, foodResp, servicesResp, paymentSettingsResp, featuredComboResp, ordersResp, partyOrders, cateringRequests, customerList, messages] = await Promise.all([
         apiGet('/admin/summary', providedToken),
         apiGet('/admin/categories', providedToken),
         apiGet('/admin/food', providedToken),
         apiGet('/admin/catering-services', providedToken),
         apiGet('/admin/payment-details', providedToken),
+        apiGet('/admin/featured-combo', providedToken),
         apiGet('/admin/orders', providedToken),
         apiGet('/admin/party-orders', providedToken),
         apiGet('/admin/catering-requests', providedToken),
@@ -155,6 +168,7 @@ function App() {
         foodItems: foodResp,
         services: servicesResp,
         paymentSettings: paymentSettingsResp,
+        featuredCombo: featuredComboResp,
         orders: ordersResp,
         partyOrders,
         cateringRequests,
@@ -253,6 +267,27 @@ function App() {
     const updated = await apiPatch('/admin/payment-details', settings, token);
     setPaymentSettings(updated);
     setAdminData((current) => ({ ...current, paymentSettings: updated }));
+    return updated;
+  };
+
+  const updateFeaturedCombo = async (combo) => {
+    const updated = await apiPatch('/admin/featured-combo', combo, token);
+    setFeaturedCombo(updated);
+    setAdminData((current) => ({ ...current, featuredCombo: updated }));
+    return updated;
+  };
+
+  const uploadFeaturedComboImage = async (image) => {
+    const updated = await apiUpload('/admin/featured-combo/image', image, token);
+    setFeaturedCombo(updated);
+    setAdminData((current) => ({ ...current, featuredCombo: updated }));
+    return updated;
+  };
+
+  const deleteFeaturedComboImage = async () => {
+    const updated = await apiDelete('/admin/featured-combo/image', token);
+    setFeaturedCombo(updated);
+    setAdminData((current) => ({ ...current, featuredCombo: updated }));
     return updated;
   };
 
@@ -442,7 +477,7 @@ function App() {
         <Header user={user} cart={cart} onLogout={handleLogout} />
         <main className="page-content">
           <Routes>
-            <Route path="/" element={<HomePage categories={categories} foodItems={foodItems} addToCart={addToCart} />} />
+            <Route path="/" element={<HomePage categories={categories} foodItems={foodItems} addToCart={addToCart} featuredCombo={featuredCombo} />} />
             <Route
               path="/menu"
               element={<MenuPage categories={categories} foodItems={foodItems} addToCart={addToCart} />}
@@ -511,6 +546,9 @@ function App() {
                   onPaymentSettingsUpdate={updatePaymentSettings}
                   onPaymentQrUpload={uploadPaymentQrCode}
                   onPaymentQrDelete={deletePaymentQrCode}
+                  onFeaturedComboUpdate={updateFeaturedCombo}
+                  onFeaturedComboImageUpload={uploadFeaturedComboImage}
+                  onFeaturedComboImageDelete={deleteFeaturedComboImage}
                   onOrderStatusChange={updateOrderStatus}
                   onPartyStatusChange={updatePartyStatus}
                   onCateringStatusChange={updateCateringStatus}
@@ -579,7 +617,7 @@ function Header({ user, cart, onLogout }) {
   );
 }
 
-function HomePage({ categories, foodItems, addToCart }) {
+function HomePage({ categories, foodItems, addToCart, featuredCombo = defaultFeaturedCombo }) {
   const featuredItems = foodItems.filter((item) => item.featured).slice(0, 4);
 
   return (
@@ -596,10 +634,11 @@ function HomePage({ categories, foodItems, addToCart }) {
             </div>
           </div>
           <div className="hero-card">
-            <div className="badge">Popular this week</div>
-            <h3>Chef Special Combo</h3>
-            <p>Paneer Platter + Biryani + Mango Lassi</p>
-            <strong>₹699</strong>
+            {featuredCombo.image && <img className="hero-combo-image" src={featuredCombo.image} alt={featuredCombo.name} />}
+            <div className="badge">{featuredCombo.label}</div>
+            <h3>{featuredCombo.name}</h3>
+            <p>{featuredCombo.description}</p>
+            <strong>{formatCurrency(featuredCombo.price)}</strong>
           </div>
         </div>
       </section>
@@ -1390,6 +1429,9 @@ function AdminPage({
   onPaymentSettingsUpdate,
   onPaymentQrUpload,
   onPaymentQrDelete,
+  onFeaturedComboUpdate,
+  onFeaturedComboImageUpload,
+  onFeaturedComboImageDelete,
   onOrderStatusChange,
   onPartyStatusChange,
   onCateringStatusChange
@@ -1505,6 +1547,13 @@ function AdminPage({
         onQrDelete={onPaymentQrDelete}
       />
 
+      <FeaturedComboManagementPanel
+        combo={adminData.featuredCombo || defaultFeaturedCombo}
+        onUpdate={onFeaturedComboUpdate}
+        onImageUpload={onFeaturedComboImageUpload}
+        onImageDelete={onFeaturedComboImageDelete}
+      />
+
       <div className="panel-grid">
         <div className="panel-box">
           <h3>Orders</h3>
@@ -1602,6 +1651,111 @@ function AdminPage({
         </div>
       </div>
     </div>
+  );
+}
+
+function FeaturedComboManagementPanel({ combo, onUpdate, onImageUpload, onImageDelete }) {
+  const [form, setForm] = useState(combo);
+  const [image, setImage] = useState(null);
+  const [preview, setPreview] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => setForm(combo), [combo]);
+
+  useEffect(() => {
+    if (!image) {
+      setPreview('');
+      return undefined;
+    }
+    const objectUrl = URL.createObjectURL(image);
+    setPreview(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [image]);
+
+  const save = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const updated = await onUpdate({ ...form, price: Number(form.price) });
+      setForm(updated);
+      setMessage('Popular combo updated on the homepage.');
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const upload = async () => {
+    if (!image) return;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const updated = await onImageUpload(image);
+      setForm(updated);
+      setImage(null);
+      setMessage('Combo image updated on the homepage.');
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeImage = async () => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const updated = await onImageDelete();
+      setForm(updated);
+      setImage(null);
+      setMessage('Combo image removed.');
+    } catch (removeError) {
+      setError(removeError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="food-management-panel">
+      <div className="admin-panel-heading">
+        <div>
+          <p className="eyebrow">Homepage highlight</p>
+          <h3>Popular This Week Combo</h3>
+        </div>
+      </div>
+      <form className="payment-settings-form" onSubmit={save}>
+        <div className="catalog-form-grid featured-combo-fields">
+          <input value={form.label} onChange={(event) => setForm((current) => ({ ...current, label: event.target.value }))} placeholder="Small label" maxLength="80" required />
+          <input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder="Combo title" maxLength="120" required />
+          <input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))} placeholder="Price (₹)" required />
+        </div>
+        <textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} placeholder="Combo description" rows="2" maxLength="300" required />
+        <button className="button primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save combo details'}</button>
+      </form>
+      <div className="featured-combo-image-controls">
+        {(preview || form.image) && <img src={preview || form.image} alt="Popular combo preview" />}
+        <label className="image-file-label">
+          <span>{image ? image.name : 'Choose combo image (optional)'}</span>
+          <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
+            setImage(event.target.files?.[0] || null);
+            event.target.value = '';
+            setError('');
+            setMessage('');
+          }} />
+        </label>
+        <button className="button secondary" type="button" disabled={busy || !image} onClick={upload}>{busy ? 'Uploading…' : 'Upload image'}</button>
+        {form.image && <button className="text-button delete-item-button" type="button" disabled={busy} onClick={removeImage}>Remove image</button>}
+      </div>
+      {(error || message) && <p className={error ? 'error-text' : 'success-text'} role="status">{error || message}</p>}
+    </section>
   );
 }
 

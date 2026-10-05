@@ -21,7 +21,8 @@ const uploadDirectories = {
   foods: path.join(uploadsDirectory, 'foods'),
   categories: path.join(uploadsDirectory, 'categories'),
   services: path.join(uploadsDirectory, 'services'),
-  payment: path.join(uploadsDirectory, 'payment')
+  payment: path.join(uploadsDirectory, 'payment'),
+  featuredCombo: path.join(uploadsDirectory, 'featured-combo')
 };
 const imageUpload = multer({
   storage: multer.memoryStorage(),
@@ -209,6 +210,35 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Cloud Kitchen API is running.' });
 });
 
+app.get('/api/featured-combo', (req, res) => {
+  res.json(state.featuredCombo);
+});
+
+app.get('/api/admin/featured-combo', authMiddleware, adminOnly, (req, res) => {
+  res.json(state.featuredCombo);
+});
+
+app.patch('/api/admin/featured-combo', authMiddleware, adminOnly, (req, res) => {
+  const payload = req.body || {};
+  const label = String(payload.label ?? state.featuredCombo.label).trim();
+  const name = String(payload.name ?? state.featuredCombo.name).trim();
+  const description = String(payload.description ?? state.featuredCombo.description).trim();
+  const price = Number(payload.price ?? state.featuredCombo.price);
+
+  if (!label || !name || !description) {
+    return res.status(400).json({ message: 'Combo label, name, and description are required.' });
+  }
+  if (!Number.isFinite(price) || price < 0) {
+    return res.status(400).json({ message: 'Combo price must be a non-negative amount.' });
+  }
+  if (label.length > 80 || name.length > 120 || description.length > 300) {
+    return res.status(400).json({ message: 'Combo text exceeds the allowed length.' });
+  }
+
+  Object.assign(state.featuredCombo, { label, name, description, price });
+  res.json(state.featuredCombo);
+});
+
 app.get('/api/payment-details', (req, res) => {
   res.json(state.paymentSettings);
 });
@@ -257,6 +287,48 @@ app.post('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, handle
     }
   }
   res.json(state.paymentSettings);
+});
+
+app.post('/api/admin/featured-combo/image', authMiddleware, adminOnly, handleImageUpload, async (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'Choose an image to upload.' });
+  const extension = validateImageBuffer(req.file);
+  if (!extension) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
+
+  const filename = `${randomUUID()}${extension}`;
+  try {
+    await fs.promises.mkdir(uploadDirectories.featuredCombo, { recursive: true });
+    await fs.promises.writeFile(path.join(uploadDirectories.featuredCombo, filename), req.file.buffer, { flag: 'wx' });
+  } catch (error) {
+    console.error('Featured combo image could not be saved.', error);
+    return res.status(500).json({ message: 'Featured combo image could not be saved.' });
+  }
+
+  const previousImage = state.featuredCombo.image;
+  state.featuredCombo.image = `/uploads/featured-combo/${filename}`;
+  if (previousImage.startsWith('/uploads/featured-combo/')) {
+    try {
+      await fs.promises.unlink(path.join(uploadDirectories.featuredCombo, path.basename(previousImage)));
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.error('Previous featured combo image could not be removed.', error);
+    }
+  }
+  res.json(state.featuredCombo);
+});
+
+app.delete('/api/admin/featured-combo/image', authMiddleware, adminOnly, async (req, res) => {
+  const previousImage = state.featuredCombo.image;
+  state.featuredCombo.image = '';
+  if (previousImage.startsWith('/uploads/featured-combo/')) {
+    try {
+      await fs.promises.unlink(path.join(uploadDirectories.featuredCombo, path.basename(previousImage)));
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.error('Featured combo image could not be removed.', error);
+        return res.status(500).json({ message: 'Combo image was cleared, but its old file could not be removed.' });
+      }
+    }
+  }
+  res.json(state.featuredCombo);
 });
 
 app.delete('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, async (req, res) => {

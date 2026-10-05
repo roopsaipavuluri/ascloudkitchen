@@ -11,6 +11,13 @@ const state = {
     upiId: '',
     qrCodeImage: ''
   },
+  featuredCombo: {
+    label: 'Popular this week',
+    name: 'Chef Special Combo',
+    description: 'Paneer Platter + Biryani + Mango Lassi',
+    price: 699,
+    image: ''
+  },
   services: [],
   orders: [],
   partyOrders: [],
