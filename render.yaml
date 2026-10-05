@@ -15,3 +15,7 @@ services:
         generateValue: true
       - key: CLIENT_URL
         value: https://ascloudkitchen-wqy2.vercel.app
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: as_cloud_kitchen

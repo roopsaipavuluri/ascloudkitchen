@@ -4,11 +4,17 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const fs = require('fs');
 const path = require('path');
-const { randomBytes, randomUUID } = require('crypto');
+const { randomBytes } = require('crypto');
 
 const { state, seedData } = require('./db');
+const {
+  deleteImage,
+  initializePersistence,
+  readImage,
+  saveState,
+  storeImage
+} = require('./persistence');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -17,13 +23,6 @@ if (!process.env.JWT_SECRET) {
   console.warn('JWT_SECRET is unset. Generated a temporary secret; sessions will not persist after a restart.');
 }
 const uploadsDirectory = path.resolve(__dirname, '..', 'uploads');
-const uploadDirectories = {
-  foods: path.join(uploadsDirectory, 'foods'),
-  categories: path.join(uploadsDirectory, 'categories'),
-  services: path.join(uploadsDirectory, 'services'),
-  payment: path.join(uploadsDirectory, 'payment'),
-  featuredCombo: path.join(uploadsDirectory, 'featured-combo')
-};
 const imageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -43,7 +42,55 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
+let persistenceQueue = Promise.resolve();
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+
+  const sendJson = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode >= 400) return sendJson(body);
+
+    const write = persistenceQueue.then(() => saveState(state));
+    persistenceQueue = write.catch(() => {});
+    write.then(
+      () => sendJson(body),
+      (error) => {
+        console.error('Request changes could not be persisted.', error);
+        if (!res.headersSent) {
+          res.status(500);
+          sendJson({ message: 'Changes could not be saved. Please retry.' });
+        }
+      }
+    );
+    return res;
+  };
+  next();
+});
 app.use('/uploads', express.static(uploadsDirectory));
+
+app.get('/api/media/:id', async (req, res) => {
+  try {
+    const image = await readImage(req.params.id);
+    if (!image) return res.status(404).json({ message: 'Image not found.' });
+    const imageBytes = Buffer.isBuffer(image.data)
+      ? image.data
+      : image.data.buffer.subarray(0, image.data.position);
+    res.type(image.contentType).set('Cache-Control', 'public, max-age=31536000, immutable').send(imageBytes);
+  } catch (error) {
+    console.error('Stored image could not be loaded.', error);
+    res.status(500).json({ message: 'Image could not be loaded.' });
+  }
+});
+
+function deleteImageAfterSave(res, imagePath, context) {
+  if (!imagePath) return;
+  res.once('finish', () => {
+    if (res.statusCode >= 400) return;
+    deleteImage(imagePath).catch((error) => {
+      console.error(`${context} could not be removed after saving the update.`, error);
+    });
+  });
+}
 
 function generateToken(user) {
   return jwt.sign(
@@ -265,87 +312,45 @@ app.patch('/api/admin/payment-details', authMiddleware, adminOnly, (req, res) =>
 
 app.post('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, handleImageUpload, async (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'Choose a QR code image to upload.' });
-  const extension = validateImageBuffer(req.file);
-  if (!extension) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
-
-  const filename = `${randomUUID()}${extension}`;
+  if (!validateImageBuffer(req.file)) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
   try {
-    await fs.promises.mkdir(uploadDirectories.payment, { recursive: true });
-    await fs.promises.writeFile(path.join(uploadDirectories.payment, filename), req.file.buffer, { flag: 'wx' });
+    const previousImage = state.paymentSettings.qrCodeImage;
+    state.paymentSettings.qrCodeImage = await storeImage(req.file, 'payment');
+    deleteImageAfterSave(res, previousImage, 'Previous payment QR image');
   } catch (error) {
     console.error('Payment QR code image could not be saved.', error);
     return res.status(500).json({ message: 'QR code image could not be saved.' });
   }
 
-  const previousImage = state.paymentSettings.qrCodeImage;
-  state.paymentSettings.qrCodeImage = `/uploads/payment/${filename}`;
-  if (previousImage.startsWith('/uploads/payment/')) {
-    try {
-      await fs.promises.unlink(path.join(uploadDirectories.payment, path.basename(previousImage)));
-    } catch (error) {
-      if (error.code !== 'ENOENT') console.error('Previous payment QR code could not be removed.', error);
-    }
-  }
   res.json(state.paymentSettings);
 });
 
 app.post('/api/admin/featured-combo/image', authMiddleware, adminOnly, handleImageUpload, async (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'Choose an image to upload.' });
-  const extension = validateImageBuffer(req.file);
-  if (!extension) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
-
-  const filename = `${randomUUID()}${extension}`;
+  if (!validateImageBuffer(req.file)) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
   try {
-    await fs.promises.mkdir(uploadDirectories.featuredCombo, { recursive: true });
-    await fs.promises.writeFile(path.join(uploadDirectories.featuredCombo, filename), req.file.buffer, { flag: 'wx' });
+    const previousImage = state.featuredCombo.image;
+    state.featuredCombo.image = await storeImage(req.file, 'featured-combo');
+    deleteImageAfterSave(res, previousImage, 'Previous featured combo image');
   } catch (error) {
     console.error('Featured combo image could not be saved.', error);
     return res.status(500).json({ message: 'Featured combo image could not be saved.' });
   }
 
-  const previousImage = state.featuredCombo.image;
-  state.featuredCombo.image = `/uploads/featured-combo/${filename}`;
-  if (previousImage.startsWith('/uploads/featured-combo/')) {
-    try {
-      await fs.promises.unlink(path.join(uploadDirectories.featuredCombo, path.basename(previousImage)));
-    } catch (error) {
-      if (error.code !== 'ENOENT') console.error('Previous featured combo image could not be removed.', error);
-    }
-  }
   res.json(state.featuredCombo);
 });
 
-app.delete('/api/admin/featured-combo/image', authMiddleware, adminOnly, async (req, res) => {
+app.delete('/api/admin/featured-combo/image', authMiddleware, adminOnly, (req, res) => {
   const previousImage = state.featuredCombo.image;
   state.featuredCombo.image = '';
-  if (previousImage.startsWith('/uploads/featured-combo/')) {
-    try {
-      await fs.promises.unlink(path.join(uploadDirectories.featuredCombo, path.basename(previousImage)));
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        console.error('Featured combo image could not be removed.', error);
-        return res.status(500).json({ message: 'Combo image was cleared, but its old file could not be removed.' });
-      }
-    }
-  }
+  deleteImageAfterSave(res, previousImage, 'Featured combo image');
   res.json(state.featuredCombo);
 });
 
-app.delete('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, async (req, res) => {
+app.delete('/api/admin/payment-details/qr-code', authMiddleware, adminOnly, (req, res) => {
   const imagePath = state.paymentSettings.qrCodeImage;
   state.paymentSettings.qrCodeImage = '';
-
-  if (imagePath.startsWith('/uploads/payment/')) {
-    const filename = path.basename(imagePath);
-    try {
-      await fs.promises.unlink(path.join(uploadDirectories.payment, filename));
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        console.error('Previous payment QR code could not be removed.', error);
-        return res.status(500).json({ message: 'QR code was cleared, but its old image could not be removed.' });
-      }
-    }
-  }
+  deleteImageAfterSave(res, imagePath, 'Previous payment QR image');
   res.json(state.paymentSettings);
 });
 
@@ -468,19 +473,16 @@ async function saveCatalogImage(req, res, collectionName, collection, id) {
   if (!record) return res.status(404).json({ message: `${collectionName} not found.` });
   if (!req.file) return res.status(400).json({ message: 'Choose an image to upload.' });
 
-  const extension = validateImageBuffer(req.file);
-  if (!extension) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
-
-  const filename = `${randomUUID()}${extension}`;
+  if (!validateImageBuffer(req.file)) return res.status(400).json({ message: 'The uploaded file content does not match a supported image.' });
   try {
-    await fs.promises.mkdir(uploadDirectories[collectionName], { recursive: true });
-    await fs.promises.writeFile(path.join(uploadDirectories[collectionName], filename), req.file.buffer, { flag: 'wx' });
+    const previousImage = record.image;
+    record.image = await storeImage(req.file, collectionName);
+    deleteImageAfterSave(res, previousImage, `Previous ${collectionName} image`);
   } catch (error) {
     console.error(`Catalog ${collectionName} image could not be saved.`, error);
     return res.status(500).json({ message: 'Image could not be saved.' });
   }
 
-  record.image = `/uploads/${collectionName}/${filename}`;
   res.json(record);
 }
 
@@ -877,6 +879,13 @@ app.get('/api/admin/notifications', authMiddleware, adminOnly, (req, res) => {
   res.json(state.notifications.slice().reverse().slice(0, 20));
 });
 
-app.listen(PORT, () => {
-  console.log(`Cloud Kitchen server running on http://localhost:${PORT}`);
-});
+initializePersistence(state)
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Cloud Kitchen server running on http://localhost:${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Persistent storage could not be initialized; the API was not started.', error);
+    process.exitCode = 1;
+  });
