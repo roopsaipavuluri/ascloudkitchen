@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Modern cloud kitchen and food ordering website" />
+    <title>Cloud Kitchen</title>
+    <script>
+      try {
+        if (sessionStorage.getItem('as-cloud-kitchen-intro-seen')) {
+          document.documentElement.classList.add('intro-seen');
+        } else {
+          sessionStorage.setItem('as-cloud-kitchen-intro-seen', 'true');
+        }
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="startup-splash" role="status" aria-label="Loading Cloud Kitchen">
+      <div class="splash-particles" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+      <div class="splash-logo">
+        <img src="/assets/cloud-kitchen-logo.jpg" alt="AS Cloud Kitchen — The Taste of Home Foods" />
+      </div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
